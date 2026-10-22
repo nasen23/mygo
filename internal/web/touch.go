@@ -4,6 +4,7 @@ package web
 
 import (
 	"math"
+	"strconv"
 	"syscall/js"
 
 	"github.com/egoist/mygo/internal/platform"
@@ -161,4 +162,45 @@ func (s *surface) stopFling() {
 		t.fling = js.Undefined()
 	}
 	t.vx, t.vy = 0, 0
+}
+
+// listenViewport keeps a window filling the page (in body, or in a fixed
+// #mygo) within the visual viewport on touch devices: the touch keyboard
+// shrinks that, not the page, so content laid out to the page's bottom, as
+// a text field there, would lie under the keyboard. Fitted to what shows,
+// the field stays above the keyboard.
+func (s *surface) listenViewport() {
+	vv := js.Global().Get("visualViewport")
+	if vv.IsUndefined() || vv.IsNull() {
+		return
+	}
+	fit := func(js.Value) { s.fitViewport(vv) }
+	s.on(vv, "resize", true, fit)
+	s.on(vv, "scroll", true, fit)
+	s.fitViewport(vv)
+}
+
+func (s *surface) fitViewport(vv js.Value) {
+	el := s.w.el
+	if p := el.Get("parentElement"); !p.Equal(js.Global().Get("document").Get("body")) {
+		if js.Global().Call("getComputedStyle", p).Get("position").String() != "fixed" {
+			return // laid out by the page
+		}
+		el = p
+	}
+	st := el.Get("style")
+	if vv.Get("scale").Float() != 1 {
+		// Zoomed in, the page is looked at in part: it keeps its layout.
+		for _, k := range []string{"top", "left", "width", "height", "right", "bottom"} {
+			st.Set(k, "")
+		}
+		return
+	}
+	px := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) + "px" }
+	st.Set("top", px(vv.Get("offsetTop").Float()))
+	st.Set("left", px(vv.Get("offsetLeft").Float()))
+	st.Set("width", px(vv.Get("width").Float()))
+	st.Set("height", px(vv.Get("height").Float()))
+	st.Set("right", "auto")
+	st.Set("bottom", "auto")
 }

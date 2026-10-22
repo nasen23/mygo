@@ -201,6 +201,9 @@ func (s *surface) listen() {
 	}
 
 	s.listenTouch(c)
+	if s.native {
+		s.listenViewport()
+	}
 	s.on(c, "pointermove", true, func(e js.Value) {
 		if s.touchEvent(e) {
 			return
