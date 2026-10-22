@@ -760,10 +760,15 @@ func (e *canvasEngine) register(data []byte, family string) error {
 	face := js.Global().Get("FontFace").New(family, buf.Get("buffer"))
 	fonts := js.Global().Get("document").Get("fonts")
 	fonts.Call("add", face)
-	face.Call("load").Call("catch", js.Global().Get("Function").New(""))
+	face.Call("load").Call("catch", ignoreRejection)
 	e.names = append(e.names, family)
 	clear(e.words)
 	return nil
 }
 
 var errNoFamily = errors.New("mygo: browsers need the family of a font to add")
+
+// ignoreRejection leaves a promise's rejection unreported. No JavaScript is
+// made of strings: pages' Content Security Policy forbids it without
+// 'unsafe-eval'.
+var ignoreRejection = js.FuncOf(func(js.Value, []js.Value) any { return nil })

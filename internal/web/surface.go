@@ -1098,10 +1098,16 @@ func ftoa(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
 
 // setSelectionRange and the selection's ends of an element that may not
 // have one (a browser throws, or answers null, for some input types): never
-// a panic.
-var trySelect = js.Global().Get("Function").New("el", "a", "b", "try { el.setSelectionRange(a, b) } catch (e) {}")
+// a panic. No JavaScript is made of strings: pages' Content Security Policy
+// forbids it without 'unsafe-eval'.
+func setSelection(el js.Value, start, end int) {
+	defer func() { recover() }()
+	el.Call("setSelectionRange", start, end)
+}
 
-func setSelection(el js.Value, start, end int) { trySelect.Invoke(el, start, end) }
+// ignore is a function that does nothing, as a promise's catch, to leave a
+// rejection unreported.
+var ignore = js.FuncOf(func(js.Value, []js.Value) any { return nil })
 
 func selectionOf(el js.Value) (int, int) {
 	a, b := el.Get("selectionStart"), el.Get("selectionEnd")

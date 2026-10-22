@@ -177,12 +177,12 @@ func (w *window) SetFullScreen(v bool) {
 	doc := js.Global().Get("document")
 	if v {
 		if fn := w.el.Get("requestFullscreen"); fn.Type() == js.TypeFunction {
-			w.el.Call("requestFullscreen").Call("catch", js.Global().Get("Function").New(""))
+			w.el.Call("requestFullscreen").Call("catch", ignore)
 		}
 		w.h.EnteredFullScreen()
 	} else {
 		if !doc.Get("fullscreenElement").IsNull() {
-			doc.Call("exitFullscreen").Call("catch", js.Global().Get("Function").New(""))
+			doc.Call("exitFullscreen").Call("catch", ignore)
 		}
 		w.h.LeftFullScreen()
 	}

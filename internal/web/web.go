@@ -399,11 +399,11 @@ func (c clipboard) WriteText(text string) {
 	c.b.armed = js.Undefined()
 	c.b.mu.Unlock()
 	if armed.Truthy() {
-		armed.Call("r", text)
+		armed.Invoke(js.Global().Get("Blob").New([]any{text}, map[string]any{"type": "text/plain"}))
 	}
 	if cb := js.Global().Get("navigator").Get("clipboard"); !cb.IsUndefined() {
 		p := cb.Call("writeText", text)
-		p.Call("catch", js.Global().Get("Function").New("")) // without the user acting
+		p.Call("catch", ignore) // without the user acting
 	}
 }
 
@@ -416,23 +416,30 @@ func (b *Backend) armClipboard() {
 	if js.Global().Get("ClipboardItem").IsUndefined() {
 		return
 	}
-	a := armClipboardJS.Invoke(1000)
-	if a.IsNull() {
-		return
-	}
 	b.mu.Lock()
-	b.armed = a
+	b.armed = js.Undefined()
+	b.mu.Unlock()
+	defer func() { recover() }() // no ClipboardItem of a promise: nothing armed
+	var resolve, reject js.Value
+	exec := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		resolve, reject = args[0], args[1]
+		return nil
+	})
+	p := js.Global().Get("Promise").New(exec) // which calls exec at once
+	exec.Release()
+	item := js.Global().Get("ClipboardItem").New(map[string]any{"text/plain": p})
+	js.Global().Get("navigator").Get("clipboard").Call("write", []any{item}).Call("catch", ignore)
+	var expire js.Func
+	expire = js.FuncOf(func(js.Value, []js.Value) any {
+		reject.Invoke(js.Global().Get("Error").New("nothing copied"))
+		expire.Release()
+		return nil
+	})
+	js.Global().Call("setTimeout", expire, 1000)
+	b.mu.Lock()
+	b.armed = resolve
 	b.mu.Unlock()
 }
-
-// armClipboardJS begins the write: r(text) completes it.
-var armClipboardJS = js.Global().Get("Function").New("ms", `try {
-	let r, j;
-	const p = new Promise((res, rej) => { r = (t) => res(new Blob([t], {type: "text/plain"})); j = rej; });
-	navigator.clipboard.write([new ClipboardItem({"text/plain": p})]).catch(() => {});
-	setTimeout(() => j(new Error("nothing copied")), ms);
-	return {r};
-} catch (e) { return null; }`)
 
 func (c clipboard) ReadData(formats []transfer.Format) (transfer.Data, error) {
 	c.b.mu.Lock()
