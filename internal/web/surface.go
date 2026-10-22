@@ -49,6 +49,21 @@ type surface struct {
 	// downX and downY place the last press, where a context menu opens.
 	downX, downY float64
 	clicks       platform.ClickCounter
+
+	// native is true on touch devices (a coarse pointer). There
+	// the textarea lies over the focused field and holds its text and
+	// selection, so the system's own editing works on it: the long-press
+	// menu (Paste, Select, Copy), selection handles, autocorrect and
+	// predictive text, and input methods. The browser edits the textarea
+	// and each change goes to the field's text client as a replacement of
+	// what changed (nativeSync). mirror is the text last given to it, and
+	// pushed the field's selection last given to it.
+	native    bool
+	mirror    string
+	pushed    platform.TextRange
+	pressedAt float64
+	pressX    float64
+	pressY    float64
 }
 
 func newSurface(w *window) (*surface, error) {
@@ -57,7 +72,13 @@ func newSurface(w *window) (*surface, error) {
 	s.canvas = doc.Call("createElement", "canvas")
 	s.canvas.Set("tabIndex", -1)
 	s.input = doc.Call("createElement", "textarea")
-	for k, v := range map[string]string{"autocomplete": "off", "autocorrect": "off", "autocapitalize": "off", "spellcheck": "false", "tabindex": "-1", "inputmode": "none"} {
+	s.native = js.Global().Call("matchMedia", "(pointer: coarse)").Get("matches").Bool()
+	attrs := map[string]string{"autocomplete": "off", "autocorrect": "off", "autocapitalize": "off", "spellcheck": "false", "tabindex": "-1", "inputmode": "none"}
+	if s.native {
+		// the system's corrections and predictions work on the field's own text
+		attrs["autocorrect"], attrs["autocapitalize"], attrs["spellcheck"] = "on", "sentences", "true"
+	}
+	for k, v := range attrs {
 		s.input.Call("setAttribute", k, v)
 	}
 	w.el.Call("appendChild", s.canvas)
@@ -315,6 +336,13 @@ func (s *surface) listen() {
 	s.on(in, "keydown", false, func(e js.Value) { s.key(e, true) })
 	s.on(in, "keyup", false, func(e js.Value) { s.key(e, false) })
 	s.on(in, "beforeinput", false, func(e js.Value) {
+		if s.nativeEditing() {
+			switch e.Get("inputType").String() {
+			case "insertLineBreak", "insertParagraph", "historyUndo", "historyRedo":
+				e.Call("preventDefault")
+			}
+			return
+		}
 		switch e.Get("inputType").String() {
 		case "insertText":
 			if !e.Get("isComposing").Bool() && !s.composing {
@@ -330,22 +358,70 @@ func (s *surface) listen() {
 			e.Call("preventDefault")
 		}
 	})
+	s.on(in, "input", true, func(e js.Value) {
+		if s.nativeEditing() && !s.composing && !e.Get("isComposing").Bool() {
+			s.nativeSync()
+		}
+	})
 	s.on(in, "compositionstart", true, func(js.Value) { s.composing = true })
 	s.on(in, "compositionupdate", true, func(e js.Value) {
 		t := e.Get("data").String()
+		if s.nativeEditing() {
+			// the composition shows in the field, where the textarea has it (marked text)
+			s.nativeCompose(t)
+			return
+		}
 		s.send(platform.SurfaceEvent{Kind: platform.TextComposition, Text: t, Caret: utf8.RuneCountInString(t)})
 	})
 	s.on(in, "compositionend", true, func(e js.Value) {
 		s.composing = false
+		if s.nativeEditing() {
+			if c := s.text.Client; c != nil {
+				// the composition is now the field's text: compare the textarea
+				// with that, so only a difference (none, usually) is applied
+				c.UnmarkText()
+				s.mirror, _ = c.TextForRange(platform.TextRange{Start: 0, End: math.MaxInt32})
+			}
+			s.nativeSync()
+			return
+		}
 		s.send(platform.SurfaceEvent{Kind: platform.TextComposition})
 		if t := e.Get("data"); t.Type() == js.TypeString && t.String() != "" {
 			s.send(platform.SurfaceEvent{Kind: platform.TextInput, Text: t.String()})
 		}
 		in.Set("value", "")
 	})
-	s.on(in, "copy", false, func(e js.Value) { s.copy(e, "copy") })
-	s.on(in, "cut", false, func(e js.Value) { s.copy(e, "cut") })
+	// A tap on the field moves the content's caret, as a tap on the canvas
+	// does; a long press is the system's (its menu, selecting a word).
+	s.on(in, "pointerdown", true, func(e js.Value) {
+		s.pressedAt = e.Get("timeStamp").Float()
+		s.pressX, s.pressY = s.point(e)
+	})
+	s.on(in, "pointerup", true, func(e js.Value) {
+		x, y := s.point(e)
+		if e.Get("timeStamp").Float()-s.pressedAt > 350 || math.Abs(x-s.pressX)+math.Abs(y-s.pressY) > 10 {
+			return
+		}
+		clicks := s.clicks.Press(0, x, y, uint32(e.Get("timeStamp").Float()), platform.DefaultDoubleClick)
+		s.send(platform.SurfaceEvent{Kind: platform.PointerDown, X: x, Y: y, Button: 0, Clicks: clicks})
+		s.send(platform.SurfaceEvent{Kind: platform.PointerUp, X: x, Y: y, Button: 0})
+	})
+	s.on(in, "copy", false, func(e js.Value) {
+		if s.nativeEditing() && s.nativeSelected() {
+			return // the system copies the textarea's selection: the field's text
+		}
+		s.copy(e, "copy")
+	})
+	s.on(in, "cut", false, func(e js.Value) {
+		if s.nativeEditing() && s.nativeSelected() {
+			return // and cuts it; the input event that follows edits the field
+		}
+		s.copy(e, "cut")
+	})
 	s.on(in, "paste", false, func(e js.Value) {
+		if s.nativeEditing() {
+			return // the browser pastes into the textarea; the input event edits the field
+		}
 		e.Call("preventDefault")
 		data := e.Get("clipboardData")
 		if data.IsNull() || data.IsUndefined() {
@@ -466,6 +542,9 @@ func (s *surface) key(e js.Value, down bool) {
 	code := e.Get("code").String()
 	k, physical := keyOf(name, code), codeKey(code)
 	primary := mods&platform.ModCtrl != 0
+	if s.nativeEditing() && !primary && (name == "Backspace" || name == "Delete" || utf8.RuneCountInString(name) == 1) {
+		return // the browser edits the textarea, and the input event the field
+	}
 	if down && primary && mods&(platform.ModAlt|platform.ModShift) == 0 {
 		switch k {
 		case platform.KeyV:
@@ -674,14 +753,119 @@ func (s *surface) SetTextInput(t platform.TextInputState) {
 	}
 	s.text = t
 	st := s.input.Get("style")
+	if s.native {
+		s.nativeLayout(t)
+	}
 	if !t.Active {
 		st.Set("left", "0")
 		st.Set("top", "0")
 		return
 	}
+	if s.nativeEditing() {
+		return
+	}
 	st.Set("left", ftoa(t.Caret.X)+"px")
 	st.Set("top", ftoa(t.Caret.Y)+"px")
 	st.Set("height", ftoa(max(t.Caret.H, 1))+"px")
+}
+
+// ---- touch devices: the field's own textarea ----
+
+// nativeEditing: the textarea is the focused field's, on a touch device.
+func (s *surface) nativeEditing() bool {
+	return s.native && s.text.Active && s.text.Client != nil && s.text.Field.W > 0
+}
+
+// nativeLayout lays the textarea over the field, with its text and
+// selection, or back out of sight.
+func (s *surface) nativeLayout(t platform.TextInputState) {
+	st := s.input.Get("style")
+	if !(t.Active && t.Client != nil && t.Field.W > 0) {
+		st.Set("width", "1px")
+		st.Set("zIndex", "-1")
+		st.Set("color", "transparent")
+		if s.mirror != "" {
+			s.input.Set("value", "") // no field's text left behind
+		}
+		s.mirror, s.pushed = "", platform.TextRange{}
+		return
+	}
+	f := t.Field
+	// At least a finger tall (44 DIPs, as iOS asks of touch targets), centered
+	// on the field, so a long press anywhere on it reaches the textarea.
+	if f.H < 44 {
+		f.Y -= (44 - f.H) / 2
+		f.H = 44
+	}
+	// Its text where the field draws it, so the system's selection and
+	// handles land near the field's own glyphs; the field draws the text.
+	line := max(t.Caret.H, 1)
+	padX, padY := 0.0, 0.0
+	if b, _, ok := t.Client.BoundsForRange(platform.TextRange{}); ok {
+		padX, padY = max(0, b.X-f.X), max(0, b.Y-f.Y)
+	}
+	for k, v := range map[string]string{
+		"left": ftoa(f.X) + "px", "top": ftoa(f.Y) + "px", "width": ftoa(f.W) + "px", "height": ftoa(f.H) + "px",
+		"zIndex": "2", "opacity": "1", "color": "transparent", "caretColor": "transparent", "background": "transparent",
+		"webkitTextFillColor": "transparent", "whiteSpace": "pre-wrap", "overflow": "hidden",
+		"fontSize": ftoa(math.Max(12, math.Round(line/1.3))) + "px", "lineHeight": ftoa(line) + "px",
+		"padding": ftoa(padY) + "px 0 0 " + ftoa(padX) + "px", "boxSizing": "border-box", "fontFamily": "system-ui,-apple-system,sans-serif",
+		"webkitUserSelect": "text", "userSelect": "text", "webkitTouchCallout": "default",
+	} {
+		st.Set(k, v)
+	}
+	if s.composing {
+		return
+	}
+	text, _ := t.Client.TextForRange(platform.TextRange{Start: 0, End: math.MaxInt32})
+	sel := t.Client.Selection().Range
+	if text != s.mirror {
+		s.input.Set("value", text)
+		s.mirror = text
+		s.pushed = platform.TextRange{Start: -1}
+	}
+	// The field's selection moved (a tap, an arrow key, its own edit): the
+	// textarea's follows. The textarea's own moves (its handles) stay.
+	if sel != s.pushed {
+		s.input.Call("setSelectionRange", sel.Start, sel.End)
+		s.pushed = sel
+	}
+}
+
+// nativeSync gives the field what the browser changed in the textarea: the
+// runs that differ from the text it last held, as one replacement.
+func (s *surface) nativeSync() {
+	c := s.text.Client
+	if c == nil {
+		return
+	}
+	now := s.input.Get("value").String()
+	from, to, text, ok := textDiff(s.mirror, now)
+	s.mirror = now
+	if !ok {
+		return
+	}
+	c.ReplaceText(&platform.TextRange{Start: from, End: to}, text)
+	// the caret where the browser left it
+	st, en := s.input.Get("selectionStart").Int(), s.input.Get("selectionEnd").Int()
+	s.pushed = platform.TextRange{Start: st, End: en}
+}
+
+// nativeCompose shows an input method's composition in the field as marked
+// text, over what it replaces in the textarea.
+func (s *surface) nativeCompose(t string) {
+	c := s.text.Client
+	if c == nil {
+		return
+	}
+	n := utf16Len(t)
+	c.SetMarkedText(nil, t, platform.TextRange{Start: n, End: n})
+}
+
+// nativeSelected: the textarea has a selection of its own (from the
+// system's menu or handles).
+func (s *surface) nativeSelected() bool {
+	return s.input.Get("selectionEnd").Int() > s.input.Get("selectionStart").Int()
 }
 
 func (s *surface) UpdateAccessibility(*platform.AccessTree)  {}

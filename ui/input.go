@@ -994,6 +994,8 @@ func (rt *engine) updateTextInput() {
 			r := transformRect(s.world, Rect{X: s.x, Y: s.y, W: 1, H: s.h})
 			t.Caret = platform.RectF{X: float64(r.X), Y: float64(r.Y), W: float64(r.W), H: float64(r.H)}
 		}
+		f := transformRect(s.world, Rect{X: s.x, Y: s.y, W: s.w, H: s.h})
+		t.Field = platform.RectF{X: float64(f.X), Y: float64(f.Y), W: float64(f.W), H: float64(f.H)}
 	} else if s != nil && s.editor == nil && s.input != nil && s.takesText && rt.windowFocus() {
 		// An element taking text itself: no text around the caret.
 		t.Active, t.NoInputMethod = true, s.noIME

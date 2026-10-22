@@ -126,6 +126,10 @@ type TextInputState struct {
 	Active bool
 	// Caret is the caret's rectangle, in DIPs relative to the surface.
 	Caret RectF
+	// Field is the editable element's rectangle, in DIPs relative to the
+	// surface: where a touch device's own edit menu (paste, select) opens
+	// on a long press.
+	Field RectF
 	// Text is the input's text around the caret, and Start and End are the
 	// selection in it, in runes: both the caret when nothing is selected.
 	// Input methods read it to edit what was typed before, as the accents
