@@ -68,7 +68,37 @@ type surface struct {
 	pressedAt float64
 	pressX    float64
 	pressY    float64
+
+	// touch is the finger on the canvas (touch devices): it scrolls.
+	touch touchState
 }
+
+// touchState follows a finger on the canvas. A finger that moves before it
+// has been held for touchHold scrolls what is under it, and keeps scrolling
+// once it lifts, slowing down; a tap is a click; a finger held still
+// presses there, as the mouse does, and its moves then drag (selecting
+// text). Pointer events tell no more than this: the canvas takes them all
+// (touch-action: none), and the browser scrolls nothing.
+type touchState struct {
+	id                 int     // the pointer followed, 0 with none
+	startX, startY     float64 // where it went down
+	lastX, lastY, last float64 // where it was last, and when (ms)
+	vx, vy             float64 // its speed (DIPs a ms)
+	scrolling, pressed bool
+	hold               js.Value // the setTimeout of a press
+	fling              js.Value // the requestAnimationFrame of a fling
+	flingAt            float64
+	holdFunc, flingFn  js.Func
+}
+
+// touchSlop is how far a finger moves before it scrolls (DIPs), touchHold
+// how long it is held still to press (ms), and touchDecay how much of its
+// speed a fling keeps each ms, as iOS scroll views.
+const (
+	touchSlop  = 8
+	touchHold  = 450
+	touchDecay = 0.998
+)
 
 func newSurface(w *window) (*surface, error) {
 	doc := js.Global().Get("document")
@@ -169,13 +199,20 @@ func (s *surface) listen() {
 		})
 	}
 
+	s.listenTouch(c)
 	s.on(c, "pointermove", true, func(e js.Value) {
+		if s.touchEvent(e) {
+			return
+		}
 		x, y := s.point(e)
 		s.send(platform.SurfaceEvent{Kind: platform.PointerMove, X: x, Y: y, Mods: s.mods(e)})
 	})
 	s.on(c, "pointerdown", false, func(e js.Value) {
 		e.Call("preventDefault")
 		s.focus()
+		if s.touchEvent(e) {
+			return
+		}
 		x, y := s.point(e)
 		button := e.Get("button").Int()
 		switch button {
@@ -195,6 +232,9 @@ func (s *surface) listen() {
 		s.send(platform.SurfaceEvent{Kind: platform.PointerDown, X: x, Y: y, Button: b, Clicks: clicks, Mods: s.mods(e)})
 	})
 	s.on(c, "pointerup", true, func(e js.Value) {
+		if s.touchEvent(e) {
+			return
+		}
 		button := e.Get("button").Int()
 		if button == 3 || button == 4 {
 			return
@@ -203,6 +243,9 @@ func (s *surface) listen() {
 		s.send(platform.SurfaceEvent{Kind: platform.PointerUp, X: x, Y: y, Button: buttonOf(button), Mods: s.mods(e)})
 	})
 	s.on(c, "pointercancel", true, func(e js.Value) {
+		if s.touchEvent(e) {
+			return
+		}
 		x, y := s.point(e)
 		s.send(platform.SurfaceEvent{Kind: platform.PointerUp, X: x, Y: y, Button: buttonOf(e.Get("button").Int()), Mods: s.mods(e)})
 	})
