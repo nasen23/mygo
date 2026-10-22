@@ -16,8 +16,11 @@ func (s *surface) listenTouch(c js.Value) {
 		s.w.b.sync(func() {
 			t.hold = js.Undefined()
 			if !s.closed && t.id != 0 && !t.scrolling && !t.pressed {
+				// A long press selects the word there, as iOS's does; the
+				// finger's moves then select more, by words.
 				t.pressed = true
-				s.touchPress(t.startX, t.startY, js.Global().Get("performance").Call("now").Float())
+				s.downX, s.downY = t.startX, t.startY
+				s.send(platform.SurfaceEvent{Kind: platform.PointerDown, X: t.startX, Y: t.startY, Clicks: 1, Hold: true})
 			}
 		})
 		return nil
@@ -81,6 +84,12 @@ func (s *surface) touchEvent(e js.Value) bool {
 		canceled := e.Get("type").String() == "pointercancel"
 		switch {
 		case t.pressed:
+			// Lifted, it opens the context menu there (Copy, for text
+			// selected), as the secondary button does; the menu takes the
+			// press, which clicks nothing then.
+			s.downX, s.downY = x, y
+			s.send(platform.SurfaceEvent{Kind: platform.PointerDown, X: x, Y: y, Button: 1, Clicks: 1})
+			s.send(platform.SurfaceEvent{Kind: platform.PointerUp, X: x, Y: y, Button: 1})
 			s.send(platform.SurfaceEvent{Kind: platform.PointerUp, X: x, Y: y})
 			s.send(platform.SurfaceEvent{Kind: platform.PointerLeave})
 		case t.scrolling:

@@ -24,6 +24,7 @@ user-select:none;-webkit-user-select:none;cursor:default;outline:none}
 .mygo-menu-item.on>.accel{opacity:.8}
 .mygo-menu-item[aria-disabled=true]{opacity:.35}
 .mygo-menu-separator{height:1px;margin:5px 10px;background:rgba(0,0,0,.12)}
+@media (pointer:coarse){.mygo-menu{min-width:220px;font-size:16px;border-radius:12px}.mygo-menu-item{height:44px}}
 @media (prefers-color-scheme:dark){.mygo-menu{color:#f5f5f7;background:rgba(40,40,42,.96);box-shadow:0 0 0 .5px rgba(255,255,255,.18),0 8px 24px rgba(0,0,0,.4)}
 .mygo-menu-separator{background:rgba(255,255,255,.14)}}
 `
@@ -207,6 +208,7 @@ func (p *popup) open(m *platform.Menu, x, y float64, level int, choose func(int)
 		})
 		p.on(row, "pointerup", func(js.Value) {
 			if it.Enabled && it.Type != platform.MenuItemSubmenu {
+				p.b.armClipboard() // the item may copy
 				choose(it.ID)
 				p.done = true
 			}

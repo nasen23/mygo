@@ -48,7 +48,9 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		rt.pointerMove(x, y)
 	case platform.PointerDown:
 		rt.pointerMove(x, y)
+		rt.holding = ev.Hold
 		rt.pointerDown(x, y, ev.Button, Modifiers(ev.Mods), ev.Clicks)
+		rt.holding = false
 	case platform.PointerUp:
 		rt.pointerMove(x, y)
 		rt.pointerUp(ev.Button, ev.Clicks)
@@ -338,6 +340,9 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks i
 	}
 	h := rt.handler(chain)
 	clicks = rt.countPress(chain, target, h, max(clicks, 1))
+	if rt.holding && button == 0 {
+		clicks = 2 // a word, as a double click selects
+	}
 	if h != nil && rt.deliver(h, InputEvent{Kind: InputPointerDown, Button: button, Mods: mods, Clicks: clicks}) {
 		// It takes the moves and the release.
 		rt.pressed, rt.pressButton, rt.pressClicks = h, button, clicks
@@ -381,7 +386,7 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, clicks i
 		target.editor.pressMods = mods
 		target.editor.press(target.pressX, target.pressY, clicks, button)
 	}
-	if clicks == 2 && button == 0 {
+	if clicks == 2 && button == 0 && !rt.holding {
 		target.doubleClicks++
 	}
 }

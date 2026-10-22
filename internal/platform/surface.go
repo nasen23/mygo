@@ -278,6 +278,9 @@ type SurfaceEvent struct {
 	// Button is 0 for the primary button, 1 the secondary, 2 the middle.
 	Button int
 	Clicks int
+	// Hold marks a PointerDown of a finger held still (touch): it selects
+	// the word there, as a double click does, without counting as one.
+	Hold bool
 	// DX and DY are scroll distances in DIPs; Precise marks touchpads and
 	// other devices that scroll by pixels rather than by lines.
 	DX, DY  float64

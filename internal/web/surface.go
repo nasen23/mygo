@@ -76,9 +76,10 @@ type surface struct {
 // touchState follows a finger on the canvas. A finger that moves before it
 // has been held for touchHold scrolls what is under it, and keeps scrolling
 // once it lifts, slowing down; a tap is a click; a finger held still
-// presses there, as the mouse does, and its moves then drag (selecting
-// text). Pointer events tell no more than this: the canvas takes them all
-// (touch-action: none), and the browser scrolls nothing.
+// selects the word there, its moves then select more, and lifted it opens
+// the context menu (Copy). Pointer events tell no more than this: the
+// canvas takes them all (touch-action: none), and the browser scrolls
+// nothing.
 type touchState struct {
 	id                 int     // the pointer followed, 0 with none
 	startX, startY     float64 // where it went down

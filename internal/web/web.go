@@ -46,6 +46,9 @@ type Backend struct {
 	// a rich text's own format.
 	clip     string
 	clipData transfer.Data
+	// armed is a clipboard write a tap or click began, which the text the
+	// app copies next completes (armClipboard).
+	armed js.Value
 	// source is the appearance the app asked for: "light", "dark" or
 	// "system".
 	source string
@@ -392,12 +395,44 @@ func (c clipboard) WriteText(text string) {
 	c.b.mu.Lock()
 	c.b.clip = text
 	c.b.clipData = transfer.TextData(text)
+	armed := c.b.armed
+	c.b.armed = js.Undefined()
 	c.b.mu.Unlock()
+	if armed.Truthy() {
+		armed.Call("r", text)
+	}
 	if cb := js.Global().Get("navigator").Get("clipboard"); !cb.IsUndefined() {
 		p := cb.Call("writeText", text)
 		p.Call("catch", js.Global().Get("Function").New("")) // without the user acting
 	}
 }
+
+// armClipboard begins a clipboard write while the user acts, as a menu
+// item is chosen, for the text the app copies in the second that follows
+// (its next frame, typically): Safari writes the clipboard only while the
+// user acts, and only a write begun then with text to come (a ClipboardItem
+// of a promise) can wait for it. Unused, it writes nothing.
+func (b *Backend) armClipboard() {
+	if js.Global().Get("ClipboardItem").IsUndefined() {
+		return
+	}
+	a := armClipboardJS.Invoke(1000)
+	if a.IsNull() {
+		return
+	}
+	b.mu.Lock()
+	b.armed = a
+	b.mu.Unlock()
+}
+
+// armClipboardJS begins the write: r(text) completes it.
+var armClipboardJS = js.Global().Get("Function").New("ms", `try {
+	let r, j;
+	const p = new Promise((res, rej) => { r = (t) => res(new Blob([t], {type: "text/plain"})); j = rej; });
+	navigator.clipboard.write([new ClipboardItem({"text/plain": p})]).catch(() => {});
+	setTimeout(() => j(new Error("nothing copied")), ms);
+	return {r};
+} catch (e) { return null; }`)
 
 func (c clipboard) ReadData(formats []transfer.Format) (transfer.Data, error) {
 	c.b.mu.Lock()
