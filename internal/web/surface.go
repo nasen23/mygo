@@ -885,6 +885,7 @@ func (s *surface) nativeSwitch(el js.Value) {
 	st := old.Get("style")
 	st.Set("zIndex", "-1")
 	st.Set("width", "1px")
+	st.Set("transform", "none")
 	if old.Equal(s.area) || old.Equal(s.pass) {
 		old.Set("value", "") // no field's text (no password) left behind
 	}
@@ -916,6 +917,7 @@ func (s *surface) nativeLayout(t platform.TextInputState) {
 		st.Set("width", "1px")
 		st.Set("zIndex", "-1")
 		st.Set("color", "transparent")
+		st.Set("transform", "none")
 		if s.mirror != "" {
 			s.input.Set("value", "") // no field's text left behind
 		}
@@ -931,20 +933,27 @@ func (s *surface) nativeLayout(t platform.TextInputState) {
 	}
 	// Its text where the field draws it, so the system's selection and
 	// handles land near the field's own glyphs; the field draws the text.
+	// Its font is 16px at least, scaled down to the field's size: iOS zooms
+	// the page into a focused field whose text is smaller.
 	line := max(t.Caret.H, 1)
 	padX, padY := 0.0, 0.0
 	if b, _, ok := t.Client.BoundsForRange(platform.TextRange{}); ok {
 		padX, padY = max(0, b.X-f.X), max(0, b.Y-f.Y)
 	}
-	for k, v := range map[string]string{
-		"left": ftoa(f.X) + "px", "top": ftoa(f.Y) + "px", "width": ftoa(f.W) + "px", "height": ftoa(f.H) + "px",
+	font, k := math.Round(line/1.3), 1.0
+	if font < 16 {
+		k, font = font/16, 16
+	}
+	for key, v := range map[string]string{
+		"left": ftoa(f.X) + "px", "top": ftoa(f.Y) + "px", "width": ftoa(f.W/k) + "px", "height": ftoa(f.H/k) + "px",
+		"transform": "scale(" + ftoa(k) + ")", "transformOrigin": "0 0", "touchAction": "manipulation",
 		"zIndex": "2", "opacity": "1", "color": "transparent", "caretColor": "transparent", "background": "transparent",
 		"webkitTextFillColor": "transparent", "whiteSpace": "pre-wrap", "overflow": "hidden",
-		"fontSize": ftoa(math.Max(12, math.Round(line/1.3))) + "px", "lineHeight": ftoa(line) + "px",
-		"padding": ftoa(padY) + "px 0 0 " + ftoa(padX) + "px", "boxSizing": "border-box", "fontFamily": "system-ui,-apple-system,sans-serif",
+		"fontSize": ftoa(font) + "px", "lineHeight": ftoa(line/k) + "px",
+		"padding": ftoa(padY/k) + "px 0 0 " + ftoa(padX/k) + "px", "boxSizing": "border-box", "fontFamily": "system-ui,-apple-system,sans-serif",
 		"webkitUserSelect": "text", "userSelect": "text", "webkitTouchCallout": "default",
 	} {
-		st.Set(k, v)
+		st.Set(key, v)
 	}
 	if s.composing {
 		return
