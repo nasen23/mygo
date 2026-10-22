@@ -124,6 +124,8 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		taken = rt.dataDrop(x, y, ev.Drag)
 	case platform.AccessibilityOn:
 		rt.accessibilityOn()
+	case platform.TextAutofill:
+		taken = rt.autofill(ev.ContentType, ev.Text)
 	case platform.AccessAction:
 		rt.accessAction(ev)
 	}
@@ -996,6 +998,12 @@ func (rt *engine) updateTextInput() {
 		}
 		f := transformRect(s.world, Rect{X: s.x, Y: s.y, W: s.w, H: s.h})
 		t.Field = platform.RectF{X: float64(f.X), Y: float64(f.Y), W: float64(f.W), H: float64(f.H)}
+		if ed := s.editor; ed != nil {
+			t.Secure, t.ContentType = ed.password, ed.contentType
+			if t.Secure && t.ContentType == "" {
+				t.ContentType = string(ContentCurrentPassword)
+			}
+		}
 	} else if s != nil && s.editor == nil && s.input != nil && s.takesText && rt.windowFocus() {
 		// An element taking text itself: no text around the caret.
 		t.Active, t.NoInputMethod = true, s.noIME
@@ -1495,3 +1503,28 @@ func (rt *engine) modsChanged(mods Modifiers) {
 // or modifier event said: a view showing each row's shortcut while Cmd is
 // held reads it, and draws again as it changes.
 func (c *context) Modifiers() Modifiers { return c.rt.mods }
+
+// autofill fills the field the system's password autofill names: kind is
+// "username" (a username or email field) or "password".
+func (rt *engine) autofill(kind, text string) bool {
+	for _, s := range rt.states {
+		ed := s.editor
+		if ed == nil || ed.readOnly || ed.document != nil {
+			continue
+		}
+		ct := TextContentType(ed.contentType)
+		user := ct == ContentUsername || ct == ContentEmail || ct == ContentEmailUsername
+		pass := ed.password || ct == ContentCurrentPassword || ct == ContentNewPassword
+		if (kind == "username" && user) || (kind == "password" && pass) {
+			ed.setText(text)
+			ed.compose = ""
+			ed.caret, ed.anchor = ed.buf.n, ed.buf.n
+			if ed.value != nil {
+				*ed.value = text
+			}
+			rt.requestFrame()
+			return true
+		}
+	}
+	return false
+}

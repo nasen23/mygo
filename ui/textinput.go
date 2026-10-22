@@ -257,6 +257,29 @@ func (e *node) Password() *node {
 	return e
 }
 
+// TextContentType says what a text input holds, as HTML's autocomplete
+// tokens: the system's keyboard, password autofill and suggestions (a strong
+// password for ContentNewPassword) follow it.
+type TextContentType string
+
+const (
+	ContentUsername        TextContentType = "username"
+	ContentEmail           TextContentType = "email"
+	ContentEmailUsername   TextContentType = "email username" // an email address that signs in
+	ContentCurrentPassword TextContentType = "current-password"
+	ContentNewPassword     TextContentType = "new-password"
+	ContentOneTimeCode     TextContentType = "one-time-code"
+)
+
+// ContentType tells the system what a text input holds (TextContentType). A
+// Password input is a ContentCurrentPassword unless it says otherwise.
+func (e *node) ContentType(t TextContentType) *node {
+	if ed := e.st.editor; ed != nil {
+		ed.contentType = string(t)
+	}
+	return e
+}
+
 // Selectable lets the user select and copy text by dragging, double-clicking
 // a word, triple-clicking a line, or using Shift with the arrows. Its context
 // menu has Copy and Select All; Cmd+C copies the selection.

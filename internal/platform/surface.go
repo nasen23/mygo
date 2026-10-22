@@ -130,6 +130,13 @@ type TextInputState struct {
 	// surface: where a touch device's own edit menu (paste, select) opens
 	// on a long press.
 	Field RectF
+	// Secure is true for a password field: the system hides it and offers
+	// saved passwords. ContentType says what the field holds, as HTML's
+	// autocomplete tokens ("username", "email", "email username",
+	// "current-password", "new-password", "one-time-code"), for the
+	// system's keyboard and autofill.
+	Secure      bool
+	ContentType string
 	// Text is the input's text around the caret, and Start and End are the
 	// selection in it, in runes: both the caret when nothing is selected.
 	// Input methods read it to edit what was typed before, as the accents
@@ -257,6 +264,10 @@ const (
 	// the surface has the keyboard again, and the content moves the focus
 	// on from the web view's element.
 	WebViewTabOut
+	// TextAutofill fills the field of ContentType ("username" or
+	// "password") with Text, as the system's password autofill fills a
+	// sign-in form's other field than the focused one.
+	TextAutofill
 )
 
 // SurfaceEvent is input on a Surface, or a change of it.
@@ -296,6 +307,8 @@ type SurfaceEvent struct {
 	Action AccessActionKind
 	// WebView is WebViewTabOut's.
 	WebView WebView
+	// ContentType is TextAutofill's.
+	ContentType string
 	// Paced marks a SurfaceFrame of frames following each other at the
 	// display's refreshes (PacedSurface): the content may draw it later,
 	// once the display can take it, which it tells by returning true from

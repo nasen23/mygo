@@ -53,6 +53,7 @@ type editor struct {
 	readOnly           bool   // selectable text: selected and copied, not edited
 	source             string // the text of selectable text
 	password           bool
+	contentType        string // TextContentType
 	// onPaste sees a paste before it is inserted (OnPaste).
 	onPaste func(text string) bool
 	// onTextKey sees a key before the editor takes it (OnTextKey).

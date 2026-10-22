@@ -59,6 +59,10 @@ type surface struct {
 	// what changed (nativeSync). mirror is the text last given to it, and
 	// pushed the field's selection last given to it.
 	native    bool
+	area      js.Value // the textarea
+	user      js.Value // a sign-in form's username input (touch devices)
+	pass      js.Value // and its password input
+	switching bool     // the keyboard moves between them: not a blur
 	mirror    string
 	pushed    platform.TextRange
 	pressedAt float64
@@ -83,6 +87,10 @@ func newSurface(w *window) (*surface, error) {
 	}
 	w.el.Call("appendChild", s.canvas)
 	w.el.Call("appendChild", s.input)
+	s.area = s.input
+	if s.native {
+		s.newSignInForm(doc)
+	}
 	ctx, err := gl.NewContext(s.canvas)
 	if err != nil {
 		log.Printf("mygo: drawing in memory: %v", err)
@@ -323,12 +331,31 @@ func (s *surface) listen() {
 		js.Global().Get("Promise").Call("allSettled", reads).Call("then", done)
 	})
 
+	s.listenInput(in)
+	// on touch devices, a sign-in form's fields have inputs of
+	// their own kind (nativeKinds), for the system's password autofill
+	if s.user.Truthy() {
+		s.listenInput(s.user)
+		s.listenInput(s.pass)
+	}
+}
+
+// listenInput handles the events of one of the elements that take the
+// keyboard (the textarea, or on touch devices the inputs of a sign-in
+// form). Only the active one, s.input, edits the content's text.
+func (s *surface) listenInput(in js.Value) {
 	s.on(in, "focus", true, func(js.Value) {
+		if s.switching || !in.Equal(s.input) {
+			return
+		}
 		s.w.focused = true
 		s.w.h.Focused()
 		s.send(platform.SurfaceEvent{Kind: platform.SurfaceFocus})
 	})
 	s.on(in, "blur", true, func(js.Value) {
+		if s.switching || !in.Equal(s.input) {
+			return
+		}
 		s.w.focused = false
 		s.send(platform.SurfaceEvent{Kind: platform.SurfaceBlur})
 		s.w.h.Blurred()
@@ -359,6 +386,11 @@ func (s *surface) listen() {
 		}
 	})
 	s.on(in, "input", true, func(e js.Value) {
+		if !in.Equal(s.input) {
+			// the system filled the other field of a sign-in form (password autofill)
+			s.nativeAutofill(in)
+			return
+		}
 		if s.nativeEditing() && !s.composing && !e.Get("isComposing").Bool() {
 			s.nativeSync()
 		}
@@ -744,11 +776,19 @@ func (s *surface) SetCursor(c platform.Cursor) {
 // the focused textarea changes. Keys of a hardware keyboard come either
 // way.
 func (s *surface) SetTextInput(t platform.TextInputState) {
-	if t.Active != s.text.Active {
-		mode := "none"
-		if t.Active {
-			mode = "text"
+	if s.native {
+		s.nativeSwitch(s.nativeInputFor(t)) // first: the keyboard's element for the field's kind
+	}
+	mode := "none"
+	if t.Active {
+		mode = "text"
+		if s.input.Equal(s.user) {
+			if m := s.user.Call("getAttribute", "inputmode").String(); m == "numeric" || m == "email" {
+				mode = m
+			}
 		}
+	}
+	if s.input.Call("getAttribute", "inputmode").String() != mode {
 		s.input.Call("setAttribute", "inputmode", mode)
 	}
 	s.text = t
@@ -770,6 +810,98 @@ func (s *surface) SetTextInput(t platform.TextInputState) {
 }
 
 // ---- touch devices: the field's own textarea ----
+
+// newSignInForm makes the inputs a sign-in form's fields use on touch
+// devices: a username and a password input in a real form, as the system's
+// password autofill and strong-password suggestions need them, to fill both
+// fields at once. They lie out of sight like the textarea until a field of
+// their kind has the keyboard (nativeInputFor).
+func (s *surface) newSignInForm(doc js.Value) {
+	form := doc.Call("createElement", "form")
+	form.Call("setAttribute", "autocomplete", "on")
+	form.Get("style").Set("cssText", "position:absolute;left:0;top:0;width:0;height:0;margin:0;padding:0;overflow:visible")
+	s.on(form, "submit", false, func(e js.Value) { e.Call("preventDefault") })
+	mk := func(typ, ac string) js.Value {
+		in := doc.Call("createElement", "input")
+		for k, v := range map[string]string{"type": typ, "autocomplete": ac, "autocorrect": "off", "autocapitalize": "off", "spellcheck": "false", "tabindex": "-1", "inputmode": "none"} {
+			in.Call("setAttribute", k, v)
+		}
+		in.Get("style").Set("cssText", "position:absolute;left:0;top:0;width:1px;height:1em;padding:0;margin:0;border:0;outline:none;opacity:0;color:transparent;background:transparent;caret-color:transparent;font-size:16px;z-index:-1")
+		form.Call("appendChild", in)
+		return in
+	}
+	s.user = mk("text", "username")
+	s.pass = mk("password", "current-password")
+	s.w.el.Call("appendChild", form)
+}
+
+// nativeInputFor returns the element a field of t's kind uses on a touch
+// device, set up for that kind: the password input for a password, the
+// username input for a username, email or one-time code, else the textarea.
+func (s *surface) nativeInputFor(t platform.TextInputState) js.Value {
+	if !s.user.Truthy() || !t.Active || t.Client == nil {
+		return s.area
+	}
+	switch {
+	case t.Secure:
+		ac := t.ContentType
+		if ac != "new-password" {
+			ac = "current-password"
+		}
+		s.pass.Call("setAttribute", "autocomplete", ac)
+		return s.pass
+	case t.ContentType == "username" || t.ContentType == "email" || t.ContentType == "email username" || t.ContentType == "one-time-code":
+		// type=text with an email keyboard: email inputs don't let a page
+		// read or set their selection, which mirroring the field needs
+		ac, mode := t.ContentType, "text"
+		switch t.ContentType {
+		case "email":
+			mode = "email"
+		case "email username":
+			ac, mode = "username", "email"
+		case "one-time-code":
+			mode = "numeric"
+		}
+		s.user.Call("setAttribute", "autocomplete", ac)
+		s.user.Call("setAttribute", "inputmode", mode)
+		return s.user
+	}
+	return s.area
+}
+
+// nativeSwitch gives the keyboard to el (inside the press that focused the
+// field, so a touch keyboard shows): the element of the field's kind.
+func (s *surface) nativeSwitch(el js.Value) {
+	if el.Equal(s.input) {
+		return
+	}
+	old := s.input
+	s.switching = true
+	s.input = el
+	s.mirror, s.pushed = "\x00", platform.TextRange{Start: -1} // write the field's text into it
+	if s.w.focused {
+		el.Call("focus", map[string]any{"preventScroll": true})
+	}
+	st := old.Get("style")
+	st.Set("zIndex", "-1")
+	st.Set("width", "1px")
+	if old.Equal(s.area) || old.Equal(s.pass) {
+		old.Set("value", "") // no field's text (no password) left behind
+	}
+	s.switching = false
+}
+
+// nativeAutofill: the system filled the sign-in form's input that doesn't
+// have the keyboard; its field gets the text.
+func (s *surface) nativeAutofill(in js.Value) {
+	kind := "username"
+	if in.Equal(s.pass) {
+		kind = "password"
+	} else if !in.Equal(s.user) {
+		return
+	}
+	s.send(platform.SurfaceEvent{Kind: platform.TextAutofill, ContentType: kind, Text: in.Get("value").String()})
+}
 
 // nativeEditing: the textarea is the focused field's, on a touch device.
 func (s *surface) nativeEditing() bool {
@@ -827,7 +959,7 @@ func (s *surface) nativeLayout(t platform.TextInputState) {
 	// The field's selection moved (a tap, an arrow key, its own edit): the
 	// textarea's follows. The textarea's own moves (its handles) stay.
 	if sel != s.pushed {
-		s.input.Call("setSelectionRange", sel.Start, sel.End)
+		setSelection(s.input, sel.Start, sel.End)
 		s.pushed = sel
 	}
 }
@@ -847,7 +979,7 @@ func (s *surface) nativeSync() {
 	}
 	c.ReplaceText(&platform.TextRange{Start: from, End: to}, text)
 	// the caret where the browser left it
-	st, en := s.input.Get("selectionStart").Int(), s.input.Get("selectionEnd").Int()
+	st, en := selectionOf(s.input)
 	s.pushed = platform.TextRange{Start: st, End: en}
 }
 
@@ -865,7 +997,8 @@ func (s *surface) nativeCompose(t string) {
 // nativeSelected: the textarea has a selection of its own (from the
 // system's menu or handles).
 func (s *surface) nativeSelected() bool {
-	return s.input.Get("selectionEnd").Int() > s.input.Get("selectionStart").Int()
+	st, en := selectionOf(s.input)
+	return en > st
 }
 
 func (s *surface) UpdateAccessibility(*platform.AccessTree)  {}
@@ -906,3 +1039,18 @@ func (s *surface) close() {
 
 func itoa(n int) string     { return strconv.Itoa(n) }
 func ftoa(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
+
+// setSelectionRange and the selection's ends of an element that may not
+// have one (a browser throws, or answers null, for some input types): never
+// a panic.
+var trySelect = js.Global().Get("Function").New("el", "a", "b", "try { el.setSelectionRange(a, b) } catch (e) {}")
+
+func setSelection(el js.Value, start, end int) { trySelect.Invoke(el, start, end) }
+
+func selectionOf(el js.Value) (int, int) {
+	a, b := el.Get("selectionStart"), el.Get("selectionEnd")
+	if a.Type() != js.TypeNumber || b.Type() != js.TypeNumber {
+		return 0, 0
+	}
+	return a.Int(), b.Int()
+}

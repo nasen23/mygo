@@ -3217,6 +3217,18 @@ func (_handle Element) ContentTransition(t ContentTransition) Element {
 	return wrapElement(_node.ContentTransition(t))
 }
 
+// ContentType tells the system what a text input holds (TextContentType). A
+// Password input is a ContentCurrentPassword unless it says otherwise.
+func (_handle Element) ContentType(t TextContentType) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.ContentType(t))
+}
+
 // ContextMenu gives the element a context menu, which build fills with
 // items. The system shows it where the element is clicked with the
 // secondary button, or Control-clicked on macOS, and, while the element or
