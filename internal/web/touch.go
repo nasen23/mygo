@@ -196,11 +196,22 @@ func (s *surface) fitViewport(vv js.Value) {
 		}
 		return
 	}
-	px := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) + "px" }
+	// On whole device pixels, where the canvas's pixels are the screen's:
+	// between them, the frames would be resampled, blurred.
+	dpr := devicePixelRatio()
+	px := func(v float64) string { return strconv.FormatFloat(math.Round(v*dpr)/dpr, 'f', -1, 64) + "px" }
+	h := vv.Get("height").Float()
 	st.Set("top", px(vv.Get("offsetTop").Float()))
 	st.Set("left", px(vv.Get("offsetLeft").Float()))
 	st.Set("width", px(vv.Get("width").Float()))
-	st.Set("height", px(vv.Get("height").Float()))
+	st.Set("height", px(h))
 	st.Set("right", "auto")
 	st.Set("bottom", "auto")
+	// data-mygo-keyboard marks it while the keyboard shows, for the page's
+	// styles (the keyboard covers the home indicator's safe area).
+	if js.Global().Get("document").Get("documentElement").Get("clientHeight").Float()-h > 100 {
+		el.Call("setAttribute", "data-mygo-keyboard", "")
+	} else {
+		el.Call("removeAttribute", "data-mygo-keyboard")
+	}
 }
